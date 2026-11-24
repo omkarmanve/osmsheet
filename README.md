@@ -1,442 +1,784 @@
-# EDI Mapper
+EDI Mapper
+A tool that displays EDI data (pipe-separated records) in an Excel-like
+grid.
 
-EDI data (pipe-separated records) ko Excel jaisi grid me dikhane wala tool. Isme aap:
-
-1. EDI data paste karke har segment ko **sahi column me** arrange kar sakte ho (jahan data nahi hai wahan blank).
-2. Column ka **sequence** apne hisaab se set kar sakte ho.
-3. Excel se **mapping paste** karke EE (employee) rows ko mapping ke rules se **validate** kar sakte ho (abhi INS segment / Column B).
-4. Result ko **Excel (.xlsx)** me export kar sakte ho.
-
-Data kahin save nahi hota. Sab kuch request ke saath jata hai aur wapas aata hai.
-
----
-
-## 1. Chalane ke steps (Windows PowerShell)
-
-```powershell
-cd edi_mapper                    # jis folder me main.py hai
-python -m venv venv              # sirf pehli baar
+It allows you to:
+1. Paste EDI data and arrange each segment into the correct column,
+   leaving blank cells where data is missing.
+2. Set the column sequence according to your requirements.
+3. Paste mapping data from Excel and validate EE (employee) rows
+   according to mapping rules.
+4. Export the result to Excel (.xlsx).
+Data is not stored anywhere. Everything is sent with the request and
+returned in the response.
+1. How to Run (Windows PowerShell)
+cd edi_mapper
+python -m venv venv
 .\venv\Scripts\activate
-pip install -r requirements.txt  # sirf pehli baar
+pip install -r requirements.txt
 python -m uvicorn main:app --reload
-```
+Then open:
 
-Phir browser me kholo: **http://127.0.0.1:8000**
+http://127.0.0.1:8000
+Always run the command from the folder containing main.py. After
+extracting a ZIP file, you may sometimes get edi_mapper\edi_mapper\;
+in that case, move one folder inside.
 
-> Command hamesha usi folder se chalao jisme `main.py` hai. Zip extract karne par kabhi kabhi `edi_mapper\edi_mapper\` ban jata hai, us case me ek folder andar jao.
-
----
-
-## 2. Folder structure
-
-```
+2. Folder Structure
 edi_mapper/
-├── main.py                  # FastAPI app: page, static files, /api/process
-├── requirements.txt         # fastapi, uvicorn, pydantic
-├── README.md                # ye file
+├── main.py                    # FastAPI app: page, static files, /api/process
+├── requirements.txt           # fastapi, uvicorn, pydantic
+├── README.md                  # This file
 │
-├── frontend/                # Browser wala hissa (HTML / CSS / JS)
-│   ├── index.html           # Page ka layout
-│   ├── style.css            # Excel jaisa look
-│   ├── script.js            # Grid, process, sequence, zoom, export
-│   └── validation.js        # Mapping grid + Validate button + cell colors
+├── frontend/                  # Browser-side HTML / CSS / JS
+│   ├── index.html             # Page layout
+│   ├── style.css              # Excel-like styling
+│   ├── script.js              # Grid, processing, sequence, zoom, export
+│   ├── validation.js          # Mapping grid, Validate button, cell colors
+│   ├── import.js              # EDI/file import
+│   ├── logic.js               # XML logic validation UI
+│   └── xml_table.js           # XML-to-table UI
 │
-└── r1/                      # Backend logic (Python package)
-    ├── __init__.py          # r1 ko package banata hai (khali file)
-    ├── parser.py            # Raw text -> records, separator detect
-    ├── mapper.py            # Records -> columns/rows (main logic)
-    ├── checks.py            # Basic table checks (empty row, bad format)
-    ├── mapping_parser.py    # Pasted mapping text -> rules
-    ├── validator.py         # Rules ke hisaab se cells check karna
-    └── validate_api.py      # POST /api/validate endpoint
-```
-
----
-
-## 3. Pura flow (ek nazar me)
-
-```
-EDI paste  --Process-->  POST /api/process
-                              |
-                  parser.parse_records()   -> records (list of strings)
-                  mapper.map_records()     -> columns + rows (aligned)
-                  checks.validate_rows()   -> errors / warnings
-                              |
-                         Grid me dikhta hai (script.js)
-                              |
-Mapping paste (Excel grid) + Filter (EE) + Validate click
-                              |
-                       POST /api/validate
-                  mapping_parser.parse_mapping()  -> rules
-                  validator.validate_against_mapping()
-                              |
-            Cell green (pass) / red (error) / yellow (warning)
-            + neeche issues ki list (click karo to cell par jump)
-```
-
----
-
-## 4. Backend files ka logic
-
-### `main.py`
-- `GET /` -> `frontend/index.html` dikhata hai.
-- `/static/...` -> `frontend` folder ki files (CSS, JS) serve karta hai.
-- `POST /api/process` -> EDI text leta hai, `parse_records` -> `map_records` -> `validate_rows` chalata hai aur ye wapas deta hai:
-  `columns`, `rows`, `record_count`, `employee_count`, `dependent_count`, `errors`, `warnings`.
-- `/api/validate` ka router `r1/validate_api.py` se judta hai (`app.include_router`).
-- Dropdown ke naam (`pipe`, `tilde`, `tab`, `semicolon`, `comma`) ko asli character (`|`, `~`, `\t`, `;`, `,`) me badalta hai.
-
-### `r1/parser.py`
-- `detect_field_separator(data)`: `| ~ TAB ; ,` me se jo sabse zyada baar aaye wahi segment separator maanta hai. Kuch na mile to `|`.
-- `parse_records(...)`: raw text ko **records** me todta hai.
-  - Record separator default **newline** hai (har line ek record).
-  - Custom separator ya dropdown ka option bhi chalta hai.
-  - Khali lines hata di jati hain.
-- Returns: `records, record_separator, field_separator`.
-
-### `r1/mapper.py` (sabse important)
-Har record ko segments me todta hai (`|` se), aur har segment ko ek **key** deta hai. Column position se nahi, **key se** decide hota hai. Isiliye jo segment kisi record me nahi hota, wahan blank cell aata hai aur baaki data apni jagah par rehta hai.
-
-**Key rules (`get_key`):**
-
-| Segment | Key |
-|---|---|
-| `18*030...`, `01*...` (number + `*`) | `NUMBER` |
-| `INS*N*01*...` | `INS` |
-| `REF*0F*...` / `REF*1L*...` | `REF*0F` / `REF*1L` |
-| `DMG*D8*...` | `DMG*D8` |
-| `DTP*348*...` | `DTP*348` |
-| `HD*030*...` | `HD*030` |
-| sirf number, `*` nahi (`2537463`) | `SSN` |
-| baaki (`NM1`, `PER`, `N3`, `N4`...) | pehla tag (`NM1`, `PER`...) |
-
-**Repeated segment:** ek record me same key dobara aaye to alag column milta hai:
-`DTP*348` (1st), `DTP*348#2` (2nd), `DTP*348#3` (3rd). Isi tarah `REF*1L`, `REF*1L#2`. Data kabhi merge nahi hota.
-
-**Column order (merge-order):** jab koi naya key mile (jaise Michael ke record me `PER` nahi tha par Sarah me hai), wo us key ke **theek baad** insert hota hai jo us record me uske pehle tha. Isse `PER` hamesha `NM1` aur `N3` ke beech me hi aata hai, chahe pehla record `PER` ke bina ho.
-
-**Aur details:**
-- Khali segments (`||`) skip hote hain.
-- `EE RECORD` aur `DEPENDENT RECORD` ginti (`employee_count`, `dependent_count`) me count hote hain.
-- Output columns ke naam `Column_1`, `Column_2`... hote hain (grid me A, B, C... dikhte hain).
-
-### `r1/checks.py`
-`validate_rows(rows)`: data ko badle bina basic check:
-- Koi row nahi -> warning.
-- Row dict nahi -> error.
-- Poori row khali -> warning.
-
-### `r1/mapping_parser.py`
-Excel se copy ki hui mapping (`NM101  IL`) ko rules me badalta hai.
-
-- Har line tab / `|` / space se **key** aur **value** me bantti hai.
-- Key `NM101` -> segment `NM1` + element `01`. (`N301` -> `N3` + `01`, `INS02` -> `INS` + `02`)
-- **Alias:** mapping me INS03 se pehle wale `IEA01`/`IEA02` ko `INS01`/`INS02` maana jata hai (mapping sheet ki galti). Last wale `IEA` rows alag rehte hain.
-- Value ka matlab:
-
-| Mapping value | Matlab |
-|---|---|
-| `01,18,19,53` | In me se koi ek |
-| `30` | Exactly `30` (`030` bhi chalega, numeric compare) |
-| `NOT USED` | Blank hona chahiye |
-| `NULL` (list me) | Blank bhi chalega |
-| `(Last Name)`, `<SSN>` | Koi bhi value, par blank nahi (free text) |
-| `A - Active` | Sirf `A` compare hota hai |
-| `(Addr line 2),NULL` | Free text, blank bhi chalega |
-
-- Pehchani na jaane wali line par warning aati hai.
-
-### `r1/validator.py`
-Abhi **INS segment** (Column B) validate hota hai.
-
-- **Cell dhoondhna:** position se nahi, text se. Jo cell `INS*` ya `18*` (number + `*`) se shuru ho wahi INS cell hai. Isse sequence badalne par bhi sahi chalta hai.
-- **Elements:** segment `*` se tootta hai, aur position = element number:
-  - Dependent: `INS*N*01*030*XN*A***FT` -> INS01=`N`, INS02=`01`, INS03=`030`...
-  - EE: `18*030**A***FT` -> pehla value INS02 hai (INS01 nahi hota).
-- **INS01 skip** hota hai.
-- **Har element ka check (`check_element`):**
-  - `NOT USED` -> value hui to error.
-  - Blank/missing + `NULL` nahi -> error (`value missing` ya `value blank`).
-  - Allowed list me nahi -> error (`invalid value 'XX', expected FT,L1,...`).
-  - Mapping me jo element hai hi nahi (INS06, INS07) -> check nahi hota.
-- **Output:** `issues` (cell, element, level, message, found, expected), `validated_cells` (pass/fail), `summary` (rows_checked, errors, warnings).
-- Row me INS cell na mile to **warning**.
-
-### `r1/validate_api.py`
-`POST /api/validate` -> body: `{ mapping: "text", rows: [{row_index, cells: [...]}] }`.
-Mapping me INS rules na hon to 400 error. Kuch save nahi hota.
-
----
-
-## 5. Frontend files ka logic
-
-### `frontend/index.html`
-Page ke hisse (upar se neeche): Header + Export button, Ribbon (separator, Auto Fit, Wrap, Reset Widths, Zoom), EDI paste panel, **Column Sequence** panel, (yahan `validation.js` apna **Validate with Mapping** panel inject karta hai), Spreadsheet grid, Validation Messages (errors/warnings), Footer.
-
-Script order zaroori hai: pehle `script.js`, phir `validation.js`.
-
-### `frontend/style.css`
-Excel jaisa look: green theme, sticky header, row numbers, selected-cell border, column resize handle.
-
-### `frontend/script.js`
-- **Process:** `/api/process` ko call karke `currentColumns/currentRows` (dikhne wala data) aur `originalColumns/originalRows` (asli data, kabhi nahi badalta) set karta hai.
-- **Grid:** Excel jaise column letters (A, B, C...), row numbers, cell click par address aur value formula bar me.
-- **Tools:** column resize, Auto Fit, Wrap Text, Zoom (50% to 200%), Clear Results.
-- **Export:** SheetJS (CDN) se `edi_mapped_data.xlsx` banata hai.
-- **Column Sequence:** `DEFAULT_SEQUENCE` me types ki list hoti hai (`EE RECORD`, `18*`, `REF`, `NM1`...). Aap order badal sakte ho, add/delete kar sakte ho. Apply par:
-  1. Har segment ka type pehchana jata hai.
-  2. Pehla khali matching slot use hota hai.
-  3. Slot na mile to `Extra_n` naya column banta hai (data kabhi discard nahi hota).
-  Asli data hamesha `original*` se hi liya jata hai, to dobara apply karna safe hai.
-
-### `frontend/validation.js`
-- **Mapping grid (Excel jaisa):** 2 columns (A = Element, B = Value). Excel se copy karke kisi bhi cell me Ctrl+V karo, data wahin se bharta hai aur rows apne aap badhti hain. Enter / Up / Down se cell badalte hain.
-- **Import Excel file:** `.xlsx` / `.csv` ki pehli sheet ke pehle 2 columns load hote hain (SheetJS CDN chahiye).
-- **Clear mapping** aur "kitni mapping rows" ka counter.
-- **Rows filter:** `All` / `EE RECORD only` (default) / `DEPENDENT RECORD only`. Dusri rows grid me chhup jati hain aur validate nahi hoti.
-- **Validate button:** selected rows + mapping `/api/validate` ko bhejta hai.
-- **Result:** green (pass), red (error), yellow (warning) cells. Cell par mouse le jaoge to tooltip me errors dikhte hain. Neeche list me `B1 | INS | INS09 | value missing...`, click karne par us cell par jump.
-- Grid dobara bane (Process / Apply Sequence) to purane colors hat jate hain, kyunki data badal chuka hota hai.
-
----
-
-## 6. Data privacy
-
-- Backend koi data save nahi karta (na file, na database).
-- Mapping sirf browser ki memory me rehti hai.
-- Sirf Excel export / import ke liye SheetJS library CDN se load hoti hai. Baaki sab local chalta hai.
-
----
-
-## 7. Abhi ki limits aur aage kya add ho sakta hai
-
-- Validation abhi sirf **INS (Column B)** ka hai. Baaki segments (`REF`, `NM1`, `PER`, `N3`, `N4`, `DMG`, `HD`, `DTP`) ke liye `r1/validator.py` me unke handler add karne honge. Mapping parser pehle se sab segments ke rules bana leta hai.
-- Placeholder wale elements (name, SSN, phone, date) par abhi sirf "blank nahi" check hota hai. Format check (jaise phone 10 digit, valid date) aage add ho sakta hai.
-- Agar data me EE aur dependents dono hon, to dependents ka `INS*...` aur EE ka `18*...` alag keys (`INS`, `NUMBER`) hone ki wajah se alag columns me aate hain. Validator dono ko text se dhoondh leta hai.
-- Cross-check rules (jaise dependent ka `REF*0F` employee se match kare) abhi nahi hain.
-
----
-
-## 8. Aam errors aur hal
-
-| Error | Wajah / Hal |
-|---|---|
-| `Could not import module "main"` | Galat folder se chalaya. Jis folder me `main.py` hai wahan jao (`dir` se check karo). |
-| `Attribute "app" not found in module "main"` | `main.py` me galat code paste ho gaya (`app = FastAPI(...)` hona chahiye). |
-| `No module named 'r1.validate_api'` | File `r1/` folder me nahi hai ya naam galat hai. |
-| `No module named 'fastapi'` | `pip install -r requirements.txt` (venv activate karke). |
-| JS badli par change nahi dikha | Browser me **Ctrl+F5** (cache clear). |
-| Excel import / export kaam nahi kar raha | Internet check karo (SheetJS CDN). |
-| `030` ki jagah `30` aa raha hai | Excel ne leading zero hataya. Validator dono ko barabar maanta hai. |
-
----
-
-## 9. API reference
-
-**`POST /api/process`**
-```json
-{ "data": "...", "record_separator": "auto", "field_separator": "auto",
-  "custom_record_separator": "", "custom_field_separator": "" }
-```
-Response: `columns`, `rows`, `record_count`, `employee_count`, `dependent_count`, `errors`, `warnings`.
-
-**`POST /api/validate`**
-```json
-{ "mapping": "INS02\t01,18,19,53\nINS03\t30",
-  "rows": [ { "row_index": 0, "cells": ["EE RECORD", "18*030**A***FT"] } ] }
-```
-Response: `issues`, `validated_cells`, `summary`, `mapping_warnings`.
----
-
-## 10. Logic Validation (XML) - naya feature
-
-Mapping validation ke baad, XML se logic check karne ke liye.
-
-**Files:** `r1/xml_parser.py`, `r1/logic_engine.py`, `r1/logic_api.py`, `frontend/logic.js`.
-
-**Flow:** EDI process -> filter lagao -> "Logic Validation (XML)" panel me XML paste -> **Logic Check**.
-
-- `xml_parser.py`: har `<Employee>` (ya `<User>`) block alag nikalta hai. `<CoveredDependent>` employee se alag rehta hai.
-- `logic_engine.py`:
-  - Strict match: SSN + Name (+ DOB agar dono taraf ho). Match na ho to error: "SSN match nahi hua" / "Name match nahi hua" / "SSN aur Name dono match nahi hue", aur us row ka logic nahi chalta.
-  - SSN ka XML tag fix nahi hai: employee ke saare tag values me dhoondha jata hai.
-  - INS05 rules `compute_ins05()` me hain (naya logic yahin badlo/jodo).
-  - XML me `EmploymentStatus` ya `ElevatedCOBRAStatusCode` na ho to us row par error.
-  - Dependent rows abhi skip hoti hain.
-- `POST /api/logic-validate`: body `{ xml, rows: [{row_index, cells}] }`, response `issues`, `validated_cells`, `summary`.
-- `logic.js`: visible rows bhejta hai, cells green (pass) / red (fail) karta hai, tooltip aur issues list (click par cell par jump).
-
-
----
-
-## 11. Mapping grid: dynamic columns
-
-- Excel se jitne bhi rows/columns copy karke grid me Ctrl+V karo: columns (A, B, C, D...) apne aap ban jate hain, aur data usi column me aata hai jis me Excel me tha.
-- Excel ke multi-line (quoted) cells sahi padhe jate hain; newline space me badal jati hai (input box single-line hai).
-- Validation ke liye **Element column** aur **Value column** dropdown se chuno (default A aur B). Baaki columns sirf dikhte hain, validate nahi hote.
-- "Clear mapping" par grid wapas 2 columns ka ho jata hai. Import Excel file bhi saare columns load karti hai.
-
----
-
-## 12. XML to Table
-
-XML (paste ya file upload) ko table me badalta hai. Files: `r1/xml_table.py`, `r1/xml_table_api.py`, `frontend/xml_table.js`.
-
-- Har `<Employee>` (ya `<User>`) = ek row. Root ke attributes ignore hote hain.
-- Employee ke andar ka har leaf tag = ek column (tag ka naam header). Khali tag (`<MiddleName/>`) ka column bhi banta hai, cell blank.
-- Kisi employee me tag na ho to uska cell blank. Same tag dobara aaye to `Tag`, `Tag#2`.
-- Column order: naya tag us tag ke theek baad aata hai jo us employee me uske pehle tha.
-- `<CoveredDependent>` alag **Dependents** table me, har dependent ki alag row. Pehle 3 columns link ke liye: `Employee_Row`, `Employee_SSN`, `Employee_Name`.
-- Values text rehti hain (leading zeros nahi katte).
-- Panel: file upload, **Hide empty columns**, column filter box, Employees/Dependents tabs, 200 rows ke page (Show more rows), **Export Excel** (2 sheets).
-- `POST /api/xml-table` body `{ "xml": "..." }`, response `employees`, `dependents` (har ek me `columns`, `rows`), `summary`.
-
----
-
-## 13. XML cleaning (r1/xml_clean.py)
-
-XML parse se pehle (XML to Table aur Logic Check dono me) ye saaf hota hai: BOM, control characters, pehle tag se pehle / aakhri tag ke baad ka faltu text, `<?xml ...?>` line, aur bare `&` (`&amp;` banta hai). Line/column numbers original ke barabar rehte hain.
-Phir bhi XML galat ho to error me us line ka text dikhta hai: `Invalid XML: ... line 5, column 26 | Near: '<Tag>...'`.
-
-### XML tag repair (r1/xml_clean.py, `repair_tags`)
-
-PDF/Word/email se copy ki hui XML me ye galtiyan aam hain, aur parse se pehle apne aap theek hoti hain (sirf tags, values nahi):
-- tag name ke andar spaces (`<Smoker Indicator>`, `</Marital Status>`) -> spaces hat jate hain
-- `<<Tag>` -> `<Tag>`, `< Tag>` -> `<Tag>`
-- line ke shuru ka `<` gayab (`DependentEthnicity/>`) ya end ka `>` gayab (`<Tag/`)
-- aakhir ke band na hue elements (jaise `</Transaction>`) jod diye jate hain
-Attributes wale tags (`<Transaction fileId='1'>`) ko chhua nahi jata. XML to Table ka status line batata hai kya-kya repair hua. Sahi XML me koi repair nahi hota.
-Behtar yahi hai ki original .xml file hi upload karo.
-
----
-
-## 14. XML to Table: kisi bhi XML ke liye (update)
-
-Ab XML ka structure koi bhi ho, tool khud rows/columns banata hai (`r1/xml_table.py`).
-
-- **Record pehchan:** `<Employee>`/`<User>` mile to wahi. Nahi to jo element same parent ke andar baar-baar repeat hota hai wahi record. Wrapper elements (Root -> Users -> User) chhod diye jate hain. Repeat na ho to poora document ek row.
-- **Columns:** har leaf tag (khali bhi), attributes (`Tag@attr`, record ke apne `@attr`), same tag dobara -> `Tag`, `Tag#2`.
-- **Nested repeating elements** (jaise `CoveredDependent`, `Item`, `Election`) alag table/tab, har occurrence ki alag row. Pehle columns: `<Record>_Row`, `<Record>_ID`, `<Record>_Name`.
-- Ek se zyada repeating group same level par ho to har ek ka alag tab.
-- Excel export: har table ek alag sheet.
-- API response: `tables: [{name, columns, rows}]`, `summary: {tables: [...], repairs}`.
-- XML poora memory me parse hota hai (bahut bade, 100MB+ files ke liye ye tareeka dhima ho sakta hai).
-
----
-
-## 15. XML to Table: Issues tab, search aur filters
-
-- **Issues tab:** XML me jo galti mili ya auto-repair hui, wo table ki tarah dikhti hai: `Level` (error / warning), `Type`, `Line`, `Column`, `Message`, `Original`, `Fixed`. Row par click karo to XML box me wahi line select ho jati hai.
-- XML parse hi na ho to bhi (HTTP 200, `ok: false`) sirf Issues tab dikhta hai, us line ke saath jahan galti hai.
-- **Search bar:** active table ki saari rows me, saare columns me dhoondhta hai.
-- **Column filters:** header ke neeche har column ka filter (text). Issues me Level aur Type ke dropdown.
-- "Clear search & filters" sab hata deta hai. "Find column..." sirf column ke naam se columns chhota karta hai.
-- Export Excel me Issues ki alag sheet bhi jati hai.
-- API: `POST /api/xml-table` -> `{ok, tables, issues, summary}`; `issues` ki har row `{level, type, line, column, message, original, fixed}`.
-
----
-
-## 16. Logic Check ab mapping ke logic column se chalta hai
-
-**Kaise use karein**
-1. "Validate with Mapping" grid me Excel se mapping paste karo: A = Element, B = Values, C = Logic (3 columns, jaise `NM103 | (Last Name) | <LastName>`).
-2. EDI process karo, filter lagao, "Logic Validation (XML)" me XML paste karo.
-3. "Logic column" dropdown me wo column chuno jisme logic hai (3+ columns hon to C apne aap chuna jata hai).
-4. **Logic Check** dabao. Har element ka logic XML par chalta hai aur Excel cell se compare hota hai.
-
-**Files:** `r1/logic_dsl.py` (logic text samajhna + chalana), `r1/logic_mapping.py` (mapping -> segment occurrences; `INS2` jaisa 1-digit key bhi), `r1/logic_runner.py` (rows ko XML se match + har element compare), `r1/logic_api.py` (`POST /api/logic-run`), `frontend/logic.js`.
-
-**Jo logic samajh aata hai**
-- `Hardcoded to "Y"`, `030 - Audit or Compare` (code - description), `[Blank]`, `NOT USED`
-- `<EmployeeSSN>` (XML tag ki value), `Middle Initial`
-- `<CurrentEffectiveDate> of 10/01/2026 or thereafter` (date us se pehle ho to error)
-- `If X is not null then set to X`
-- `IF <A> starts with "S" THEN set INS05 = "S" ELSE IF <B> = "C" THEN "C" ELSE "A"`; `if BPTier=3 set IND` (abbreviation BPTier = BenefitPlanTier)
-- Conditions: `=`, `equals`, `not equals`, `!=`, `starts with`, `ends with`, `contains`, `is null`, `is not null`, `AND`, `OR`
-- `remove spaces from <Tag>`, `(Note: If the A is prior to the B, use the B ...)`
-- Lookup/LUT/"Mapping from table" -> warning "cannot verify" (table available nahi hai)
-- Jo samajh nahi aata -> warning "Logic not understood" (chup-chaap pass nahi hota)
-
-**Semantics:** ek element ke kai IF statements ho to sach hone wali branch value set karti hai aur baad ka statement use override kar sakta hai; statement ka akhri ELSE tabhi chalta hai jab ab tak koi branch fire na hui ho; kuch fire na ho to value blank.
-**Matching:** SSN + Name (+ DOB) strict. Compare case-insensitive; `030` aur `30` barabar. Tag ka naam fuzzy (case/space/abbreviation). XML me tag na ho to blank + warning. Dependent rows skip.
-**Colors:** green = pass, red = error, yellow = warning. Neeche issues ki table me Level / Element ke filter, har column ka filter aur search bar.
-
-
----
-
-## 17. Employee aur Dependent logic (kuch bhi hard-coded nahi)
-
-Purana built-in INS05 / COBRA check hata diya gaya hai. Ab har check sirf mapping ke logic aur XML ke tags se chalta hai.
-
-**Mapping grid (Validate with Mapping): 4 columns**
-
-| Column | Kya paste karna hai |
-|---|---|
-| A | Element code (`NM103`, `INS05` ...) |
-| B | Valid values (`Validate` button isi se value check karta hai) |
-| C | **Employee logic** (XML ke employees ke tags se) |
-| D | **Dependent logic** (XML ke dependents ke tags se) |
-
-Logic Validation panel me "Employee logic column" (default C) aur "Dependent logic column" (default D) dropdown se column badal sakte ho.
-
-**Kaun si rows check hongi (apne aap)**
-- XML me sirf employees hain -> sirf EE rows check (Employee logic). Dependent rows skip, result me note: "N dependent row(s) skipped: the XML has no dependent data."
-- XML me employees + dependents hain aur mapping me dono logic hain -> EE rows Employee logic se, DEPENDENT rows Dependent logic se.
-- Mapping me Dependent logic nahi hai -> dependent rows skip (note ke saath). Employee logic nahi hai -> EE rows skip.
-- Koi logic nahi / sirf Dependent logic par XML me dependents nahi -> error message.
-
-**Matching**
-- Employee row: XML employee se SSN + Name (+ DOB) strict.
-- Dependent row: XML ke dependent se Name (+ DOB, + dependent SSN agar dono taraf ho) aur row ka employee SSN (REF / alag SSN cell) us dependent ke employee se milna chahiye. Galti par error: "Dependent name does not match", "Dependent DOB does not match", "Dependent ... under a different employee" etc.
-- Dependent logic me tags pehle dependent block se dhunde jate hain, na milen to employee ke tags se (jaise `<EmployeeSSN>`, `BPTier`).
-- XML me "dependent" naam wala koi bhi block (CoveredDependent, Dependent ...) dependent maana jata hai; employee ke fields me mix nahi hota.
-
-**Issues table:** Level, **Record** (employee / dependent), Row, Cell, Element, Message, Found, Expected; Level / Record / Element ke dropdown filter, har column ka filter, aur search bar. Note rows (info) neeli dikhti hain.
-
-`POST /api/logic-run` body: `{xml, rows, mapping: [{line, element, value, logic, dep_logic}]}`. `/api/logic-validate` hata diya gaya hai.
-
----
-
-## 18. Internet par live karna (Render, free)
-
-1. **Login lagana:** `main.py` me optional password login hai. Render ke Environment me `APP_PASSWORD` (aur chaho to `APP_USERNAME`, default `admin`) set karo. Set na ho (apne PC par) to login nahi lagta.
-2. Project ke **andar ki files** (main.py, requirements.txt, frontend/, r1/ ...) GitHub repo me daalo (folder `edi_mapper` khud nahi, uske andar ki cheezein). `venv/` mat daalo (`.gitignore` ye sambhalta hai).
-3. render.com -> New -> Web Service -> repo chuno. Build: `pip install -r requirements.txt`. Start: `uvicorn main:app --host 0.0.0.0 --port $PORT`. Instance type: Free.
-4. Environment me `APP_PASSWORD` daalo, Deploy karo. Link: `https://<naam>.onrender.com`.
-5. Free server 15 min idle rehne par so jata hai; pehli baar khulne me ~1 minute lag sakta hai.
-`render.yaml` optional hai (Blueprint se ek click deploy).
-
----
-
-## 19. Logic Check aur "Rows:" dropdown (fix)
-
-"Validate with Mapping" ke "Rows:" dropdown ka default **EE RECORD only** hai, jo grid me DEPENDENT rows chhupa deta hai. Pehle Logic Check sirf dikhti hui rows bhejta tha, isliye dependent rows kabhi check hi nahi hoti thi.
-
-Ab Logic Check us dropdown ko **ignore** karta hai aur grid ki saari `EE RECORD` aur `DEPENDENT RECORD` rows bhejta hai (agar grid me ye label na mile to purana tareeka: sirf dikhti rows).
-- Row ka type kisi bhi column me likhe `EE RECORD` / `DEPENDENT RECORD` se pehchana jata hai (column sequence badalne par bhi).
-- Result me "Sent from grid: N EE, M dependent row(s)" dikhta hai. Dependent logic on ho par grid me dependent row na ho to note aata hai.
-
----
-
-## 20. File import (paste bhi chalta hai) + raw 834 auto-convert
-
-- **Paste EDI Data:** "Import file" button (ya file ko text box par drag & drop). Text / EDI / 834 file seedha text box me aa jati hai; paste pehle jaisa chalta hai. (`frontend/import.js`)
-- **Logic Validation:** "Import XML file" button ya XML file text box par drop. XML to Table me file upload pehle se tha.
-- File ki encoding apne aap pehchani jati hai (BOM, UTF-16, XML ka `encoding="ISO-8859-1"`, warna UTF-8 / Windows-1252).
-- **Raw 834 (X12) automatic convert** (`r1/edi_convert.py`, UltraEdit macro `834toSingleLine` jaisa), jab text me `INS*Y*` / `INS*N*` ho aur `EE RECORD` / `DEPENDENT RECORD` na ho:
-  1. `~` (+ line break) -> `|`
-  2. `INS*Y*` -> nayi line + `|EE RECORD|`
-  3. `INS*N*` -> nayi line + `|DEPENDENT RECORD|`
-  4. `REF*0F*` -> `REF*0F*|`
-  Pehle se converted text (macro chal chuka ho) ko ye nahi chhedta. Separator ISA header se liye jate hain (default `*` aur `~`). `/api/process` response me `converted_from_834` true/false aata hai.
-- XML ko macro jaisa line-by-line karne ki zaroorat nahi: parser single-line XML bhi padh leta hai.
-
----
-
-## 21. Dependent matching (update)
-
-- Dependent row ab **apne employee ke neeche** match hoti hai: grid me us row ke upar wali matched EE row ka XML employee pehle dekha jata hai (EDI me dependents employee ke baad aate hain).
-- Row me SSN dependent ka apna ho (NM109 / `REF*0F*`) ya employee ka - dono chalte hain. Galat SSN par error: "Dependent SSN does not match".
-- XML me jo dependents hain par grid me unki row nahi, unke liye warning aati hai (jaise bina SSN wala bachcha).
-- Dependent logic me agar employee wala tag likha ho (`<FirstName>`, `<EmployeeSSN>`) aur dependent ka apna tag ho (`<DependentFirstName>`, `<DependentSSN>`), to warning batati hai ki kaun sa tag badalna hai.
-- `BPT` jaisa chhota naam agar kai tags se match ho (BenefitPlanTier / BenefitPlanType) to wo tag liya jata hai jo isi logic me pehle poore naam se aa chuka ho; warna "matches several tags" warning.
+└── r1/                        # Backend logic (Python package)
+    ├── __init__.py            # Makes r1 a Python package
+    ├── parser.py              # Raw text -> records, separator detection
+    ├── mapper.py              # Records -> columns/rows
+    ├── checks.py              # Basic table checks
+    ├── mapping_parser.py      # Pasted mapping text -> rules
+    ├── validator.py           # Validate cells according to rules
+    ├── validate_api.py        # POST /api/validate endpoint
+    ├── edi_convert.py         # Raw 834/X12 conversion
+    ├── xml_parser.py          # XML parsing
+    ├── xml_clean.py           # XML cleanup and tag repair
+    ├── xml_table.py           # XML-to-table conversion
+    ├── xml_table_api.py       # POST /api/xml-table
+    ├── logic_dsl.py           # Logic expression parsing
+    ├── logic_mapping.py       # Mapping logic extraction
+    ├── logic_runner.py        # XML logic execution
+    └── logic_api.py           # POST /api/logic-run
+3. Overall Flow
+EDI paste
+   |
+   | Process
+   v
+POST /api/process
+   |
+   +--> parser.parse_records()
+   |        -> records
+   |
+   +--> mapper.map_records()
+   |        -> columns + aligned rows
+   |
+   +--> checks.validate_rows()
+   |        -> errors / warnings
+   |
+   v
+Spreadsheet Grid
+   |
+   +--> Paste Mapping
+   +--> Apply Filter
+   +--> Validate
+            |
+            v
+      POST /api/validate
+            |
+            +--> mapping_parser.parse_mapping()
+            |        -> rules
+            |
+            +--> validator.validate_against_mapping()
+            |
+            v
+      Green = Pass
+      Red   = Error
+      Yellow = Warning
+4. Backend Logic
+main.py
+- GET / displays frontend/index.html.
+- /static/... serves files from the frontend folder.
+- POST /api/process receives EDI text and runs:
+  - parse_records
+  - map_records
+  - validate_rows
+- The response contains:
+  - columns
+  - rows
+  - record_count
+  - employee_count
+  - dependent_count
+  - errors
+  - warnings
+- The /api/validate router is connected through
+  r1/validate_api.py.
+- Dropdown separator names such as pipe, tilde, tab,
+  semicolon, and comma are converted into their actual characters.
+r1/parser.py
+detect_field_separator(data) checks:
+|
+~
+TAB
+;
+,
+and selects the separator that occurs most frequently.
+
+If no separator is detected, | is used.
+
+parse_records(...):
+- Splits raw text into records.
+- Uses newline as the default record separator.
+- Supports custom separators.
+- Supports separator selection from the UI.
+- Removes empty lines.
+Returns:
+records
+record_separator
+field_separator
+r1/mapper.py
+This is the main mapping logic.
+
+Each record is split into segments and each segment receives a key.
+Column placement is determined by the key rather than the physical
+position.
+
+Therefore, if a segment is missing from a record, its cell remains blank
+while the remaining data stays in the correct column.
+Key Rules
+  Segment                                           Key
+  18*030..., 01*...                             NUMBER
+INS*N*01*...                                    INS
+REF*0F*... / REF*1L*...                       REF*0F / REF*1L
+DMG*D8*...                                      DMG*D8
+DTP*348*...                                     DTP*348
+HD*030*...                                      HD*030
+Numeric value without *                         SSN
+Other segments such as NM1, PER, N3, N4   First tag
+Repeated Segments
+If the same key appears multiple times in one record, separate columns
+are created:
+DTP*348
+DTP*348#2
+DTP*348#3
+Similarly:
+REF*1L
+REF*1L#2
+Data is never merged.
+Column Ordering
+When a new key appears, it is inserted immediately after the key that
+came before it in that record.
+
+For example, if PER is missing from the first record but appears in
+another record, it is placed between NM1 and N3.
+
+This keeps the segment sequence consistent.
+
+Other behavior:
+- Empty segments such as || are skipped.
+- EE and dependent records are counted separately.
+- Output columns are named Column_1, Column_2, etc.
+- The UI displays them as Excel-style column letters.
+r1/checks.py
+validate_rows(rows) performs basic checks without modifying the data.
+
+Checks include:
+- No rows -> warning.
+- Row is not a dictionary -> error.
+- Completely empty row -> warning.
+r1/mapping_parser.py
+Converts mapping copied from Excel into validation rules.
+
+For example:
+NM101    IL
+is converted into a mapping rule.
+
+The parser supports:
+- Tab-separated values
+- | separated values
+- Space-separated values
+Mapping keys are converted into segment + element numbers.
+
+Examples:
+NM101 -> NM1 + 01
+N301  -> N3 + 01
+INS02 -> INS + 02
+Mapping Values
+  Mapping Value            Meaning
+  01,18,19,53            Any one of these values
+30                     Exactly 30; 030 is also accepted
+NOT USED               Must be blank
+NULL                   Blank is allowed
+(Last Name), <SSN>   Any non-blank value
+A - Active             Only A is compared
+(Addr line 2),NULL     Free text; blank is allowed
+
+Unknown mapping lines generate warnings.
+r1/validator.py
+Currently validates the INS segment.
+
+The INS cell is found by text rather than fixed column position.
+
+This means validation continues to work even when the column sequence
+changes.
+
+Elements are split using *.
+
+For example:
+INS*N*01*030*XN*A***FT
+contains:
+INS01 = N
+INS02 = 01
+INS03 = 030
+...
+For EE records such as:
+18*030**A***FT
+the first value corresponds to INS02.
+
+INS01 is skipped.
+
+Validation rules include:
+- NOT USED -> value must not exist.
+- Blank/missing value with a non-`NULL` rule -> error.
+- Value not in the allowed list -> error.
+- Elements not present in the mapping are not checked.
+The output contains:
+issues
+validated_cells
+summary
+If the INS cell cannot be found, a warning is generated.
+r1/validate_api.py
+Endpoint:
+POST /api/validate
+Request:
+{
+  "mapping": "INS02\t01,18,19,53\nINS03\t30",
+  "rows": [
+    {
+      "row_index": 0,
+      "cells": ["EE RECORD", "18*030**A***FT"]
+    }
+  ]
+}
+No data is stored.
+5. Frontend Logic
+frontend/index.html
+The page contains:
+1. Header
+2. Export button
+3. Ribbon
+4. Separator controls
+5. Auto Fit
+6. Wrap Text
+7. Reset Widths
+8. Zoom
+9. EDI input panel
+10. Column Sequence panel
+11. Validate with Mapping panel
+12. Spreadsheet grid
+13. Validation Messages
+14. Footer
+Script order is important:
+script.js
+validation.js
+frontend/style.css
+Provides the Excel-like interface:
+- Green Excel-style theme
+- Sticky headers
+- Row numbers
+- Selected-cell border
+- Column resize handles
+frontend/script.js
+Handles:
+- EDI processing
+- Grid rendering
+- Column letters
+- Row numbers
+- Cell selection
+- Formula bar
+- Column resizing
+- Auto Fit
+- Wrap Text
+- Zoom from 50% to 200%
+- Clear Results
+- Excel export
+The Process operation calls:
+/api/process
+and stores:
+currentColumns
+currentRows
+originalColumns
+originalRows
+The original data is preserved so sequence changes can safely be applied
+multiple times.
+Column Sequence
+The DEFAULT_SEQUENCE defines the segment ordering.
+
+Users can:
+- Change the order
+- Add sequence types
+- Delete sequence types
+- Apply the sequence
+When applied:
+1. Each segment type is identified.
+2. The first available matching slot is used.
+3. If no slot exists, an Extra_n column is created.
+4. Data is never discarded.
+frontend/validation.js
+Provides the mapping validation interface.
+
+Features include:
+- Excel-like mapping grid.
+- Paste mapping directly from Excel.
+- Dynamic row creation.
+- Enter / Up / Down navigation.
+- .xlsx and .csv import.
+- Clear Mapping.
+- Mapping row counter.
+- Row filters:
+  - All
+  - EE RECORD only
+  - DEPENDENT RECORD only
+- Validate button.
+- Green = pass.
+- Red = error.
+- Yellow = warning.
+- Error tooltip.
+- Clickable issue list.
+6. Data Privacy
+The backend does not store:
+- Files
+- EDI data
+- Mapping data
+- Database records
+Mapping data remains in browser memory.
+
+The only external library loaded through CDN is SheetJS for Excel
+import/export. The rest of the application runs locally.
+7. Current Limitations and Future Improvements
+Current validation mainly focuses on the INS segment.
+
+Additional handlers can be added for:
+REF
+NM1
+PER
+N3
+N4
+DMG
+HD
+DTP
+Placeholder values currently receive a basic non-blank validation.
+
+Future validation can include:
+- Phone number format
+- Date format
+- SSN format
+- Other field-specific validation
+Cross-check rules such as dependent REF*0F matching the employee are
+additional validation opportunities.
+8. Common Errors
+  Error                                          Cause / Solution
+  Could not import module "main"               Run the command from the folder
+containing main.py.
+
+  Attribute "app" not found in module "main"   Check that main.py contains
+app = FastAPI(...).
+
+  No module named 'r1.validate_api'            Check that the file exists inside
+r1/.
+
+  No module named 'fastapi'                    Activate the virtual environment and
+run
+pip install -r requirements.txt.
+
+  JS changes are not visible                     Use Ctrl+F5 to clear the browser
+cache.
+
+  Excel import/export does not work              Check your internet connection
+because SheetJS is loaded from a
+CDN.
+030 becomes 30                             Excel may remove leading zeros. The
+validator treats 030 and 30 as
+equivalent.
+9. API Reference
+POST /api/process
+Request:
+{
+  "data": "...",
+  "record_separator": "auto",
+  "field_separator": "auto",
+  "custom_record_separator": "",
+  "custom_field_separator": ""
+}
+Response:
+columns
+rows
+record_count
+employee_count
+dependent_count
+errors
+warnings
+POST /api/validate
+Request:
+{
+  "mapping": "INS02\t01,18,19,53\nINS03\t30",
+  "rows": [
+    {
+      "row_index": 0,
+      "cells": ["EE RECORD", "18*030**A***FT"]
+    }
+  ]
+}
+Response:
+issues
+validated_cells
+summary
+mapping_warnings
+10. Logic Validation (XML)
+Logic validation checks XML data against the mapping logic.
+
+Files:
+r1/xml_parser.py
+r1/logic_engine.py
+r1/logic_api.py
+frontend/logic.js
+Flow:
+EDI Process
+    ↓
+Apply Filter
+    ↓
+Logic Validation (XML)
+    ↓
+Paste XML
+    ↓
+Logic Check
+The XML parser identifies:
+- Employee blocks
+- User blocks
+- CoveredDependent blocks
+Employee and dependent data are handled separately.
+Matching
+Employee matching uses:
+SSN + Name + DOB (when available)
+Matching is strict.
+
+If the match fails, an error is generated.
+
+The XML SSN tag is not hardcoded. All employee tag values are searched.
+11. Dynamic Mapping Columns
+The mapping grid supports dynamic columns.
+
+Users can paste any number of rows and columns from Excel.
+
+Columns are created automatically and data remains in the same column
+position as it appeared in Excel.
+
+For validation:
+- Element column can be selected.
+- Value column can be selected.
+- Additional columns remain available for display.
+12. XML to Table
+XML can be converted into an Excel-like table.
+
+Files:
+r1/xml_table.py
+r1/xml_table_api.py
+frontend/xml_table.js
+Features:
+- XML paste
+- XML file upload
+- Employee table
+- Dependent table
+- Search
+- Column filters
+- Hide empty columns
+- Pagination
+- Excel export
+Each employee becomes a row.
+
+Each leaf XML tag becomes a column.
+
+If a tag does not exist for an employee, the cell remains blank.
+
+Repeated tags become:
+Tag
+Tag#2
+Dependents are displayed in a separate table.
+
+The first three dependent columns provide relationship information:
+Employee_Row
+Employee_SSN
+Employee_Name
+Values remain as text so leading zeros are preserved.
+13. XML Cleaning
+Before XML parsing, r1/xml_clean.py cleans common XML formatting
+problems.
+
+It handles:
+- BOM
+- Control characters
+- Unnecessary text before the first tag
+- Unnecessary text after the final tag
+- XML declaration
+- Bare & characters
+It can also repair common copied XML issues such as:
+<Smoker Indicator>
+<Marital Status>
+<<Tag>
+< Tag>
+Only XML tags are repaired; values are not changed.
+
+The system reports repairs in the XML Issues section.
+
+Whenever possible, upload the original XML file instead of copied text.
+14. XML to Table for Any XML Structure
+The XML-to-table system can automatically detect different XML
+structures.
+Record Detection
+If <Employee> or <User> exists, it is used as the record.
+
+Otherwise, the system detects repeated elements under the same parent.
+
+Wrapper elements are ignored.
+
+If no repeated record structure exists, the entire XML document becomes
+one row.
+Columns
+The system extracts:
+- Leaf tags
+- Attributes
+- Record-specific attributes
+- Repeated tags
+Repeated tags become:
+Tag
+Tag#2
+Nested repeating elements such as:
+CoveredDependent
+Item
+Election
+are placed into separate tables/tabs.
+
+Each table is exported as a separate Excel sheet.
+15. XML Issues, Search and Filters
+The XML Issues tab displays:
+- Level
+- Type
+- Line
+- Column
+- Message
+- Original
+- Fixed
+Users can click an issue row to jump to the relevant XML location.
+
+The search bar searches all rows and columns.
+
+Column filters are available for each active table.
+
+The Issues section supports:
+- Level filter
+- Type filter
+- Search
+- Clear Search & Filters
+- Find Column
+Issues are also exported to a separate Excel sheet.
+16. Logic Check Using Mapping Logic
+The Logic Check uses the logic columns from the mapping grid.
+
+Example:
+NM103 | (Last Name) | <LastName>
+The user can select the Logic column and run the Logic Check.
+
+The system compares each mapped element against the corresponding XML
+value.
+
+Supported logic includes:
+Hardcoded to "Y"
+030 - Audit or Compare
+[Blank]
+NOT USED
+<EmployeeSSN>
+Middle Initial
+<CurrentEffectiveDate> of 10/01/2026 or thereafter
+If X is not null then set to X
+IF <A> starts with "S" THEN set INS05 = "S" ELSE IF <B> = "C" THEN "C" ELSE "A"
+if BPTier=3 set IND
+Supported conditions include:
+=
+equals
+not equals
+!=
+starts with
+ends with
+contains
+is null
+is not null
+AND
+OR
+Unsupported lookup/LUT rules generate warnings instead of silently
+passing.
+
+Unknown logic generates:
+Logic not understood
+17. Employee and Dependent Logic
+Employee and dependent logic is mapping-driven.
+
+The mapping grid supports four columns:
+
+  Column   Purpose
+  A        Element code
+B        Valid values
+C        Employee logic
+D        Dependent logic
+
+The Logic Validation panel allows the user to choose the Employee Logic
+and Dependent Logic columns.
+Which Rows Are Checked?
+If XML contains only employees:
+- Employee rows are checked.
+- Dependent rows are skipped.
+If XML contains employees and dependents:
+- Employee rows use Employee Logic.
+- Dependent rows use Dependent Logic.
+If dependent logic is unavailable, dependent rows are skipped with an
+appropriate note.
+Matching
+Employee:
+SSN + Name + DOB
+Dependent:
+Name + DOB + Dependent SSN (when available)
++ Employee relationship
+Dependent validation ensures that the dependent belongs to the correct
+employee.
+
+The Issues table contains:
+Level
+Record
+Row
+Cell
+Element
+Message
+Found
+Expected
+18. Deploying to Render
+The application can be deployed to Render.
+1. Configure Login
+Set the following environment variables:
+APP_PASSWORD
+APP_USERNAME
+APP_USERNAME defaults to:
+admin
+If APP_PASSWORD is not configured locally, login is disabled.
+2. Push the Project to GitHub
+Push the contents of the project folder to GitHub:
+main.py
+requirements.txt
+frontend/
+r1/
+r2/
+...
+Do not push the outer edi_mapper folder itself.
+
+Do not push:
+venv/
+The .gitignore should handle this.
+3. Create Render Web Service
+Build command:
+pip install -r requirements.txt
+Start command:
+uvicorn main:app --host 0.0.0.0 --port $PORT
+Select the Free instance if required.
+4. Configure Environment
+Set:
+APP_PASSWORD
+Then deploy.
+
+The application will be available at:
+https://<your-app-name>.onrender.com
+5. Render Free Instance
+The free server may sleep after inactivity.
+
+The first request after sleeping can take approximately one minute.
+
+render.yaml is optional and can be used for Blueprint deployment.
+19. Logic Check and Rows Dropdown
+The Validate with Mapping panel contains a Rows: dropdown.
+
+Its default value is:
+EE RECORD only
+Previously, Logic Check only sent visible rows, which meant dependent
+rows could be skipped.
+
+The updated Logic Check ignores this dropdown and sends both:
+EE RECORD
+DEPENDENT RECORD
+when available.
+
+The record type is detected from the row content rather than a fixed
+column position.
+
+The result reports:
+Sent from grid: N EE, M dependent row(s)
+20. File Import and Raw 834 Auto-Conversion
+The application supports direct file import.
+EDI File Import
+The user can:
+- Click Import File
+- Drag and drop an EDI file
+- Paste EDI text
+Supported encoding detection includes:
+- BOM
+- UTF-16
+- XML encoding
+- UTF-8
+- Windows-1252
+Raw 834 Auto-Conversion
+Raw X12 834 data can automatically be converted into the format required
+by the mapper.
+
+When the text contains:
+INS*Y*
+INS*N*
+and does not already contain:
+EE RECORD
+DEPENDENT RECORD
+the converter performs:
+~ + line break -> |
+INS*Y*         -> new EE RECORD
+INS*N*         -> new DEPENDENT RECORD
+REF*0F*        -> REF*0F*|
+Already converted data is not modified again.
+
+The separators are detected from the ISA header.
+
+The /api/process response includes:
+converted_from_834
+with true or false.
+21. Dependent Matching
+Dependent matching works under the correct employee.
+
+The dependent row first uses the matched employee row immediately above
+it.
+
+This matches the typical EDI structure where dependents appear after
+their employee.
+
+The dependent SSN may come from:
+NM109
+REF*0F*
+or the employee SSN when applicable.
+
+Incorrect SSNs generate:
+Dependent SSN does not match
+Dependents that exist in XML but do not have corresponding grid rows
+generate warnings.
+
+If dependent logic references employee-only tags, the system provides a
+warning indicating which dependent tag should be used.
+
+For short tag names such as BPT, if multiple XML tags match, the
+system uses the tag previously identified by the same logic when
+possible. Otherwise, it generates a warning.
+Notes
+- The application is designed to process EDI, Excel mapping, and XML
+  validation workflows.
+- The backend does not persist uploaded business data.
+- For very large XML files, parsing the entire document in memory can
+  become slower and require more RAM.
+- For deployment, keep secrets such as APP_PASSWORD in environment
+  variables rather than committing t
