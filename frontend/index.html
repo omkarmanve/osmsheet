@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>OSM Spreadsheet</title>
+
+    <link rel="stylesheet" href="/static/style.css">
+
+    <style>
+        /* Sequence panel styles */
+        .sequence-panel {
+            background: #fff;
+            border: 1px solid var(--excel-border);
+            border-radius: 5px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+        .sequence-panel summary { cursor: pointer; font-weight: 600; }
+        #sequenceList { margin-top: 10px; max-height: 260px; overflow: auto; }
+        .sequence-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .sequence-number { width: 28px; color: var(--muted); text-align: right; }
+        .sequence-name { flex: 1; font-family: Consolas, monospace; }
+        .sequence-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .delete-sequence { color: #b42318; }
+    </style>
+
+    <!-- Excel export library -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <!-- Order matters: script.js first, then validation.js -->
+    <script src="/static/script.js" defer></script>
+    <script src="/static/validation.js" defer></script>
+    <!-- File import (text / XML), paste bhi chalta hai -->
+    <script src="/static/import.js" defer></script>
+    <!-- Logic validation (XML) -->
+    <script src="/static/logic.js" defer></script>
+    <!-- XML to table -->
+    <script src="/static/xml_table.js" defer></script>
+</head>
+
+<body>
+    <header class="app-header">
+        <div class="app-title">
+            <div class="excel-logo">X</div>
+            <div>
+                <h1>OSM Spreadsheet</h1>
+                <p>OSM Data Viewer</p>
+      
+            </div>
+        </div>
+
+        <div class="header-actions">
+            <button id="exportBtn" class="primary-btn">
+                ↓ Export Excel
+            </button>
+             <button
+        type="button"
+        class="primary-btn"
+        onclick="window.location.href='/round2'">
+        Round 2
+    </button>
+        </div>
+    </header>
+
+    <nav class="ribbon-tabs">
+        <button class="ribbon-tab active">Home</button>
+        <button class="ribbon-tab">Data</button>
+        <button class="ribbon-tab">View</button>
+    </nav>
+
+    <section class="ribbon">
+        <div class="ribbon-group">
+            <label for="recordSeparator">Record separator</label>
+
+            <select id="recordSeparator">
+                <option value="auto">Auto / Newline</option>
+                <option value="newline">Newline</option>
+                <option value="pipe">Pipe |</option>
+                <option value="tilde">Tilde ~</option>
+                <option value="semicolon">Semicolon ;</option>
+                <option value="custom">Custom</option>
+            </select>
+
+            <input
+                id="customRecordSeparator"
+                type="text"
+                placeholder="Custom separator"
+            >
+        </div>
+
+        <div class="ribbon-group">
+            <label for="fieldSeparator">Segment separator</label>
+
+            <select id="fieldSeparator">
+                <option value="auto">Auto</option>
+                <option value="pipe">Pipe |</option>
+                <option value="tilde">Tilde ~</option>
+                <option value="tab">Tab</option>
+                <option value="semicolon">Semicolon ;</option>
+                <option value="comma">Comma ,</option>
+                <option value="custom">Custom</option>
+            </select>
+
+            <input
+                id="customFieldSeparator"
+                type="text"
+                placeholder="Custom separator"
+            >
+        </div>
+
+        <div class="ribbon-group">
+            <button id="autoFitBtn">Auto Fit</button>
+            <button id="wrapBtn">Wrap Text</button>
+            <button id="resetWidthsBtn">Reset Widths</button>
+        </div>
+
+        <div class="ribbon-group">
+            <button id="zoomOutBtn">−</button>
+            <span id="zoomLabel">100%</span>
+            <button id="zoomInBtn">+</button>
+        </div>
+    </section>
+
+    <main>
+        <section class="input-panel">
+            <div class="panel-heading">
+                <h2>Paste EDI Data</h2>
+                <span>Input</span>
+            </div>
+
+            <textarea
+                id="ediInput"
+                spellcheck="false"
+                placeholder="Paste your complete EDI data here..."
+            ></textarea>
+
+            <div class="input-footer">
+                <span id="statusMessage">Ready</span>
+
+                <button id="processBtn" class="primary-btn">
+                    Process Data
+                </button>
+            </div>
+        </section>
+
+        <!-- Column sequence panel (script.js isi ko use karta hai) -->
+        <section class="sequence-panel">
+            <details>
+                <summary>Column Sequence</summary>
+
+                <div id="sequenceList"></div>
+
+                <div class="sequence-controls">
+                    <input
+                        id="newSequenceType"
+                        type="text"
+                        placeholder="New type (e.g. NM3)"
+                    >
+                    <button id="addSequenceBtn" type="button">Add</button>
+                    <button id="applySequenceBtn" type="button" class="primary-btn">
+                        Apply Sequence
+                    </button>
+                    <button id="resetSequenceBtn" type="button">Reset</button>
+                    <span id="sequenceStatus">
+                        Process EDI data before applying a sequence.
+                    </span>
+                </div>
+            </details>
+        </section>
+
+        <!-- Validation panel validation.js yahan apne aap insert karta hai -->
+
+        <section class="spreadsheet-panel">
+            <div class="sheet-heading">
+                <div>
+                    <h2>Spreadsheet</h2>
+                    <p id="summary">No data loaded</p>
+                </div>
+
+                <div class="sheet-actions">
+                    <button id="clearBtn">Clear Results</button>
+                </div>
+            </div>
+
+            <!-- Excel name box and formula bar -->
+            <div class="formula-toolbar">
+                <input
+                    id="cellAddress"
+                    type="text"
+                    value="A1"
+                    readonly
+                    aria-label="Selected cell"
+                >
+
+                <span class="formula-symbol">fx</span>
+
+                <input
+                    id="formulaInput"
+                    type="text"
+                    readonly
+                    placeholder="Selected cell value"
+                    aria-label="Cell value"
+                >
+            </div>
+
+            <!-- Excel grid -->
+            <div id="tableContainer" class="table-container">
+                <table id="resultTable">
+                    <thead></thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+
+            <div class="sheet-statusbar">
+                <span id="sheetInfo">Sheet1</span>
+                <span id="selectionInfo">Ready</span>
+                <span id="rowCount">0 rows</span>
+            </div>
+        </section>
+
+        <section class="validation-panel">
+            <details>
+                <summary>Validation Messages</summary>
+
+                <div class="validation-columns">
+                    <div>
+                        <h3>Errors</h3>
+                        <ul id="errorsList"></ul>
+                    </div>
+
+                    <div>
+                        <h3>Warnings</h3>
+                        <ul id="warningsList"></ul>
+                    </div>
+                </div>
+            </details>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <span>EDI Spreadsheet Viewer</span>
+        <span>Excel-style grid</span>
+    </footer>
+</body>
+</html>

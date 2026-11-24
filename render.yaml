@@ -1,0 +1,13 @@
+# Render.com par free deploy (optional: dashboard se bhi kar sakte ho).
+services:
+  - type: web
+    name: osm-spreadsheet
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: APP_USERNAME
+        value: admin
+      - key: APP_PASSWORD
+        sync: false   # Render dashboard me khud daalna (yahan likhna nahi)

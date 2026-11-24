@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>OSM Spreadsheet - Round 2</title>
+
+    <link rel="stylesheet" href="/static/round2/style.css">
+
+    <!-- Excel reader (used only to display the sheets in the browser) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- Round 2 JavaScript -->
+    <script src="/static/round2/round2.js" defer></script>
+</head>
+
+<body>
+
+<header class="r2-header">
+
+    <div class="app-title">
+        <div class="excel-logo">X</div>
+
+        <div>
+            <h1>OSM Spreadsheet</h1>
+            <p>Round 2 - Excel Comparison Tool</p>
+        </div>
+    </div>
+
+    <div class="header-actions">
+        <button id="resetBtn" type="button">Reset</button>
+
+        <button id="runComparisonBtn"
+                type="button"
+                class="primary-btn"
+                disabled>
+            Run Comparison
+        </button>
+    </div>
+
+</header>
+
+
+<nav class="ribbon-tabs">
+    <button class="ribbon-tab active" type="button" data-tab="comparison">Comparison</button>
+    <button class="ribbon-tab" type="button" data-tab="oldExcel">Old Excel</button>
+    <button class="ribbon-tab" type="button" data-tab="newExcel">New Excel</button>
+    <button class="ribbon-tab" type="button" data-tab="scenarioExcel">Scenario Excel</button>
+    <button class="ribbon-tab" type="button" data-tab="results">Results</button>
+</nav>
+
+
+<main class="r2-main">
+
+<!-- =========================================================
+     UPLOAD
+========================================================= -->
+
+<section id="uploadSection" class="upload-panel" data-views="comparison">
+
+    <div class="section-heading">
+        <div>
+            <h2>Excel Comparison</h2>
+            <p>
+                Old Excel and New Excel are the actual comparison sources.
+                Scenario Excel is used only to extract the SSN list.
+                The sheet that is open (active tab) in each viewer is the one that gets compared.
+            </p>
+        </div>
+
+        <div id="uploadStatus" class="status-message">
+            Select all three Excel files.
+        </div>
+    </div>
+
+    <div class="upload-grid">
+
+        <label class="upload-card" for="oldExcelInput">
+            <div class="upload-number">1</div>
+            <div class="upload-title">Old Excel</div>
+            <div class="upload-description">Reference / old data</div>
+            <input id="oldExcelInput" type="file" accept=".xlsx,.xlsm,.xltx,.xltm">
+            <div id="oldExcelFileName" class="selected-file">No file selected</div>
+            <select id="oldExcelSheetSelect" class="sheet-select" title="Sheet used for comparison" hidden></select>
+        </label>
+
+        <label class="upload-card" for="newExcelInput">
+            <div class="upload-number">2</div>
+            <div class="upload-title">New Excel</div>
+            <div class="upload-description">Updated / current data</div>
+            <input id="newExcelInput" type="file" accept=".xlsx,.xlsm,.xltx,.xltm">
+            <div id="newExcelFileName" class="selected-file">No file selected</div>
+            <select id="newExcelSheetSelect" class="sheet-select" title="Sheet used for comparison" hidden></select>
+        </label>
+
+        <label class="upload-card scenario" for="scenarioExcelInput">
+            <div class="upload-number">3</div>
+            <div class="upload-title">Scenario Excel</div>
+            <div class="upload-description">SSN list only</div>
+            <input id="scenarioExcelInput" type="file" accept=".xlsx,.xlsm,.xltx,.xltm">
+            <div id="scenarioExcelFileName" class="selected-file">No file selected</div>
+            <select id="scenarioExcelSheetSelect" class="sheet-select" title="Sheet used for comparison" hidden></select>
+        </label>
+
+    </div>
+
+    <div class="upload-options">
+        <label for="headerRowInput">
+            Header row in Old / New sheet (optional)
+        </label>
+        <input id="headerRowInput" type="number" min="0" value="0">
+        <span class="muted">
+            0 = no header, fields are shown as "Column D". Enter e.g. 1 to use
+            row 1 as field names.
+        </span>
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     EXCEL VIEWER (one viewer visible at a time)
+========================================================= -->
+
+<section id="excelViewerSection"
+         class="excel-viewer-section"
+         data-views="oldExcel newExcel scenarioExcel"
+         hidden>
+
+    <div class="viewer-header">
+        <div>
+            <h2 id="viewerTitle">Excel Viewer</h2>
+            <p id="viewerSubtitle">
+                Click a cell or row number to select. Ctrl+C copies the selection,
+                Ctrl+V pastes Excel data. Shift+click or drag selects a range.
+            </p>
+        </div>
+
+        <div class="viewer-actions">
+            <button id="copySheetBtn" type="button">Copy Sheet</button>
+            <button id="pasteSheetBtn" type="button">Paste</button>
+            <button id="searchSheetBtn" type="button">Search</button>
+        </div>
+    </div>
+
+    <section id="oldExcelViewer" class="excel-viewer" hidden></section>
+    <section id="newExcelViewer" class="excel-viewer" hidden></section>
+    <section id="scenarioExcelViewer" class="excel-viewer" hidden></section>
+
+</section>
+
+
+<!-- =========================================================
+     SCENARIO SSN PREVIEW
+========================================================= -->
+
+<section id="scenarioPreviewSection"
+         class="scenario-preview-panel"
+         data-views="comparison"
+         hidden>
+
+    <div class="section-heading">
+        <div>
+            <h2>Scenario SSNs</h2>
+            <p>
+                Only SSNs are used for comparison.
+                Other Scenario columns are ignored.
+            </p>
+        </div>
+
+        <strong id="scenarioSsnCount">0 SSNs</strong>
+    </div>
+
+    <div id="scenarioSsnList" class="ssn-preview-list"></div>
+
+</section>
+
+
+<!-- =========================================================
+     SUMMARY
+========================================================= -->
+
+<section id="summarySection"
+         class="summary-section"
+         data-views="comparison results"
+         hidden>
+
+    <div class="summary-card" data-filter="ALL">
+        <span>Total SSNs</span><strong id="summaryTotal">0</strong>
+    </div>
+    <div class="summary-card changed" data-filter="WHAT CHANGED">
+        <span>WHAT CHANGED</span><strong id="summaryChanged">0</strong>
+    </div>
+    <div class="summary-card extra" data-filter="EXTRA">
+        <span>EXTRA</span><strong id="summaryExtra">0</strong>
+    </div>
+    <div class="summary-card missing" data-filter="MISSING">
+        <span>MISSING</span><strong id="summaryMissing">0</strong>
+    </div>
+    <div class="summary-card new" data-filter="NEW">
+        <span>NEW</span><strong id="summaryNew">0</strong>
+    </div>
+    <div class="summary-card error" data-filter="ERROR">
+        <span>ERROR</span><strong id="summaryError">0</strong>
+    </div>
+    <div class="summary-card no-change" data-filter="NO CHANGE">
+        <span>NO CHANGE</span><strong id="summaryNoChange">0</strong>
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     RESULTS
+========================================================= -->
+
+<section id="resultsSection"
+         class="results-section"
+         data-views="comparison results"
+         hidden>
+
+    <div class="results-header">
+
+        <div>
+            <h2>SSN Comparison Results</h2>
+            <p>Each SSN is displayed in its own expandable / minimizable result box.</p>
+        </div>
+
+        <div class="results-actions">
+            <button id="expandAllBtn" type="button">Expand All</button>
+            <button id="collapseAllBtn" type="button">Collapse All</button>
+            <button id="copySelectedBtn" type="button">Copy Selected</button>
+            <button id="copyAllBtn" type="button" class="primary-btn">Copy All</button>
+        </div>
+
+    </div>
+
+    <div class="result-filter-bar">
+
+        <div class="result-search">
+            <label for="resultSearch">Search</label>
+            <input id="resultSearch"
+                   type="search"
+                   placeholder="Search SSN / Name / Field / Status...">
+        </div>
+
+        <div class="result-status-filter">
+            <label for="statusFilter">Status</label>
+            <select id="statusFilter">
+                <option value="ALL">ALL</option>
+                <option value="WHAT CHANGED">WHAT CHANGED</option>
+                <option value="EXTRA">EXTRA</option>
+                <option value="MISSING">MISSING</option>
+                <option value="NEW">NEW</option>
+                <option value="ERROR">ERROR</option>
+                <option value="NO CHANGE">NO CHANGE</option>
+            </select>
+        </div>
+
+        <div class="result-count">
+            <span id="visibleResultCount">0 results</span>
+        </div>
+
+    </div>
+
+    <div id="resultBoxes" class="result-boxes"></div>
+
+    <div id="noResultsMessage" class="no-results" hidden>
+        No matching SSN results found.
+    </div>
+
+</section>
+
+
+<!-- =========================================================
+     COPY PREVIEW
+========================================================= -->
+
+<section id="copyPreviewSection"
+         class="copy-preview-section"
+         hidden>
+
+    <div class="section-heading">
+        <div>
+            <h2>Copy Preview</h2>
+            <p>Tab-separated comparison data can be pasted directly into Excel.</p>
+        </div>
+
+        <button id="closeCopyPreviewBtn" type="button">Close</button>
+    </div>
+
+    <textarea id="copyPreview" readonly spellcheck="false"></textarea>
+
+</section>
+
+
+<!-- =========================================================
+     ERRORS
+========================================================= -->
+
+<section id="globalMessagesSection" class="messages-section" hidden>
+
+    <div class="message-columns">
+
+        <div class="message-column errors">
+            <h3>Errors</h3>
+            <ul id="globalErrorsList"></ul>
+        </div>
+
+        <div class="message-column warnings">
+            <h3>Warnings</h3>
+            <ul id="globalWarningsList"></ul>
+        </div>
+
+    </div>
+
+</section>
+
+</main>
+
+
+<div id="toast" class="toast" hidden></div>
+
+<footer class="app-footer">
+    <span>OSM Spreadsheet</span>
+    <span>Round 2</span>
+    <span id="footerStatus">Ready</span>
+</footer>
+
+</body>
+</html>
